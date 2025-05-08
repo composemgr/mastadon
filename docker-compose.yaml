@@ -1,14 +1,24 @@
+# nginx proxy address - https://172.17.0.1:59038
+
 name: mastodon
+x-logging: &default-logging
+  options:
+    max-size: '5m'
+    max-file: '1'
+  driver: json-file
+
 services:
   web:
     image: lscr.io/linuxserver/mastodon:latest
     container_name: mastodon-web
+    hostname: ${BASE_HOST_NAME:-$HOSTNAME}
     restart: always
     pull_policy: always
+    logging: *default-logging
     environment:
-      - TZ=America/New_York
-      - WEB_DOMAIN=mastodon.${BASE_DOMAIN_NAME}
-      - LOCAL_DOMAIN=mastodon.${BASE_DOMAIN_NAME}
+      - TZ=${TZ:-America/New_York}
+      - WEB_DOMAIN=${BASE_HOST_NAME:-$HOSTNAME}
+      - LOCAL_DOMAIN=${BASE_HOST_NAME:-$HOSTNAME}
       - OTP_SECRET=${OTP_SECRET:-Kw6QTR4wuyqyJ7dUyg81N7s8EvksmDlu}
       - SECRET_KEY_BASE=${SECRET_KEY_BASE:-EKUaB9LeLn433co2fVSF5pQj4nWDKIWm}
       - ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY=${ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY:-OJTGYuCw5t1BEIqpAtrnK9HTUQ9jZ1QV}
@@ -22,7 +32,7 @@ services:
       - NO_CHOWN=false
       - SMTP_SERVER=${EMAIL_SERVER_HOST:-172.17.0.1}
       - SMTP_PORT=${EMAIL_SERVER_PORT:-25}
-      - SMTP_FROM_ADDRESS=no-reply@mastodon.${BASE_DOMAIN_NAME}
+      - SMTP_FROM_ADDRESS=no-reply@${BASE_HOST_NAME:-$HOSTNAME}
       - SMTP_LOGIN=${EMAIL_SERVER_LOGIN_NAME:-}
       - SMTP_PASSWORD=${EMAIL_SERVER_LOGIN_PASS:-}
       - S3_ENABLED=false
@@ -30,10 +40,10 @@ services:
       - S3_ALIAS_HOST=
       - REDIS_HOST=mastodon-redis
       - REDIS_PORT=6379
-      - DB_HOST=mastodon-postgres
       - DB_USER=mastodon
       - DB_NAME=mastodon
-      - DB_PASS=mastodon
+      - DB_HOST=mastodon-db
+      - DB_PASS=tUiQWxResrK0nH3shpyTMpUHlKiaQTOx
       - DB_PORT=5432
       - ES_ENABLED=false
       - ES_HOST=mastodon-elastic
@@ -45,73 +55,88 @@ services:
       - SIDEKIQ_DEFAULT=false
       - SIDEKIQ_THREADS=5
     volumes:
+      - /var/lib/srv/${USER}/docker/linuxserver/mastodon/latest/rootfs/data/mastodon:/data
       - /var/lib/srv/${USER}/docker/linuxserver/mastodon/latest/rootfs/config/mastodon:/config
     ports:
       - '172.17.0.1:59038:80'
-      - '172.17.0.1:59039:443'
     networks:
       - mastodon
 
   streaming:
     image: ghcr.io/mastodon/mastodon-streaming:latest
     container_name: mastodon-streaming
+    hostname: mastodon-streaming
     restart: always
     pull_policy: always
     command: node ./streaming/index.js
+    logging: *default-logging
     environment:
+      - TZ=${TZ:-America/New_York}
       - REDIS_HOST=mastodon-redis
       - REDIS_PORT=6379
-      - DB_HOST=mastodon-postgres
       - DB_USER=mastodon
       - DB_NAME=mastodon
-      - DB_PASS=mastodon
+      - DB_HOST=mastodon-db
+      - DB_PASS=tUiQWxResrK0nH3shpyTMpUHlKiaQTOx
       - DB_PORT=5432
       - ES_ENABLED=false
-      - ES_HOST=mastodon-elastic
-      - ES_PORT=9200
       - ES_USER=elastic
+      - ES_HOST=mastodon-elastic
       - ES_PASS=elastic
-    expose:
-      - 4000
+      - ES_PORT=9200
     depends_on:
+      - db
       - web
-      - postgres
       - redis
     healthcheck:
-      test:
-        [
-          'CMD-SHELL',
-          "curl -s --noproxy localhost localhost:4000/api/v1/streaming/health | grep -q 'OK' || exit 1",
-        ]
+      test: ['CMD-SHELL', "curl -q -LSsf http://localhost:4000/api/v1/streaming/health | grep -q 'OK' || exit 1"]
+      interval: '10s'
+      timeout: '30s'
+      retries: 5
+      start_period: '20s'
     networks:
       - mastodon
 
-  postgres:
+  db:
     image: postgres:14-alpine
-    container_name: mastodon-postgres
+    container_name: mastodon-db
+    hostname: mastodon-db
     restart: always
     pull_policy: always
-    shm_size: 256mb
-    volumes:
-      - /var/lib/srv/${USER}/docker/linuxserver/mastodon/latest/rootfs/data/db/postgres:/var/lib/postgresql/data
+    logging: *default-logging
     environment:
-      - 'POSTGRES_USER=mastodon'
-      - 'POSTGRES_PASSWORD=mastodon'
-      - 'POSTGRES_HOST_AUTH_METHOD=trust'
+      - TZ=${TZ:-America/New_York}
+      - POSTGRES_HOST_AUTH_METHOD=trust
+      - POSTGRES_USER=mastodon
+      - POSTGRES_PASSWORD=tUiQWxResrK0nH3shpyTMpUHlKiaQTOx
+    volumes:
+      - /var/lib/srv/${USER}/docker/db/postgres/mastodon:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD', 'pg_isready', '-U', '$$POSTGRES_USER']
+      interval: '10s'
+      timeout: '30s'
+      retries: 5
+      start_period: '20s'
     networks:
       - mastodon
-    healthcheck:
-      test: ['CMD', 'pg_isready', '-U', 'mastodon']
 
   redis:
     image: redis:7-alpine
+    container_name: mastodon-redis
+    hostname: mastodon-redis
     restart: always
     pull_policy: always
-    container_name: mastodon-redis
+    logging: *default-logging
+    environment:
+      - TZ=${TZ:-America/New_York}
     volumes:
-      - /var/lib/srv/${USER}/docker/linuxserver/mastodon/latest/rootfs/data/db/redis:/data
+      - /var/lib/srv/${USER}/docker/db/redis/mastodon:/data
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
+      interval: '10s'
+      timeout: '30s'
+      retries: 5
+      start_period: '20s'
     networks:
       - mastodon
 
